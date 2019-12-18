@@ -1,0 +1,3 @@
+#!/bin/sh
+
+avr-gcc -o sunalarm -mmcu=atmega32u4 sunalarm.c && upload-teensy sunalarm
