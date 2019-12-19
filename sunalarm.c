@@ -4,10 +4,11 @@
 #include<stdbool.h>
 
 #define WAKEUP 6
+#define DAWN_INTERVAL 110
 
 int ticksPerHalfWave = 0;
 int cycleCounter = 0;
-int minuteCounter = (21 - WAKEUP) * 60;	// 9PM
+int minuteCounter = (21 - WAKEUP) * 60 - DAWN_INTERVAL;	// 9PM
 
 ISR(INT0_vect)
 {
@@ -40,13 +41,16 @@ ISR(INT0_vect)
 	}
 	if (requestedOn) {	// Requested on
 		PORTD |= (1 << PD2);
-	} else if (minuteCounter < 100) {	// Dawn
+	} else if (minuteCounter < DAWN_INTERVAL) {	// Dawn
 		PORTD &= ~(1 << PD2);
 		TCCR1B = 0;
-		OCR1A = (1 - minuteCounter / 100.0) * ticksPerHalfWave + 1;
+		const int tickDelay = (1.0 -
+				       ((double)minuteCounter) /
+				       DAWN_INTERVAL) * ticksPerHalfWave;
+		OCR1A = tickDelay < 1 ? 1 : tickDelay;
 		TCNT1 = 0;
 		TCCR1B = (1 << CS12) | (1 << CS10);
-	} else if (minuteCounter < 220) {	// Morning period always on
+	} else if (minuteCounter < 2 * DAWN_INTERVAL) {	// Morning period always on
 		PORTD |= (1 << PD2);
 	} else {		// Always off
 		PORTD &= ~(1 << PD2);
