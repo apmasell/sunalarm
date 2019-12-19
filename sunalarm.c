@@ -14,6 +14,7 @@ ISR(INT0_vect)
 	if (ticksPerHalfWave == 0) {
 		if (TCNT1 > 0) {
 			ticksPerHalfWave = TCNT1;
+			PORTD |= (1 << PD6);
 		} else {
 			TCCR1B = (1 << CS12) | (1 << CS10);
 			return;
@@ -21,8 +22,18 @@ ISR(INT0_vect)
 	}
 	const bool requestedOn = !(PINB & (1 << PB1));
 	cycleCounter = (cycleCounter + 1) % 7200;	// AC half-cycles per minute
-	if (cycleCounter % 120 == 0) {
-		PORTD ^= (1 << PD6);
+	if (requestedOn) {
+		if (cycleCounter % 60 == 0) {
+			PORTD ^= (1 << PD6);
+		}
+	} else {
+		if (cycleCounter % 120 == 80) {
+			PORTD |= (1 << PD6);
+		} else if (cycleCounter % 120 == 0
+			   && cycleCounter / 120 <=
+			   (minuteCounter / 60 + WAKEUP) % 24) {
+			PORTD &= ~(1 << PD6);
+		}
 	}
 	if (cycleCounter == 0) {
 		minuteCounter = (minuteCounter + 1) % 1440;	// minutes per day
