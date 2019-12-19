@@ -3,9 +3,11 @@
 #include<avr/sleep.h>
 #include<stdbool.h>
 
+#define WAKEUP 6
+
 int ticksPerHalfWave = 0;
 int cycleCounter = 0;
-int minuteCounter = 21 * 60;	// 9PM
+int minuteCounter = (21 - WAKEUP) * 60;	// 9PM
 
 ISR(INT0_vect)
 {
