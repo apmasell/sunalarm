@@ -19,6 +19,7 @@ ISR(INT0_vect)
 			return;
 		}
 	}
+	const bool requestedOn = !(PINB & (1 << PB1));
 	cycleCounter = (cycleCounter + 1) % 7200;	// AC half-cycles per minute
 	if (cycleCounter % 120 == 0) {
 		PORTD ^= (1 << PD6);
@@ -26,10 +27,8 @@ ISR(INT0_vect)
 	if (cycleCounter == 0) {
 		minuteCounter = (minuteCounter + 1) % 1440;	// minutes per day
 	}
-
-	if (PIND & (1 << PB1)) {	// Requested on
+	if (requestedOn) {	// Requested on
 		PORTD |= (1 << PD2);
-
 	} else if (minuteCounter < 100) {	// Dawn
 		PORTD &= ~(1 << PD2);
 		TCCR1B = 0;
