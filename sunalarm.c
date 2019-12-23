@@ -54,7 +54,10 @@ ISR(INT0_vect)
 			for (int i = 0; i < DAWN_INTERVAL; i++) {
 				const int tickDelay = (DAWN_INTERVAL -
 						       i) *
-				    ticksPerHalfWave / DAWN_INTERVAL;
+				    ticksPerHalfWave / DAWN_INTERVAL *
+				    (DAWN_INTERVAL - i) / DAWN_INTERVAL *
+				    (DAWN_INTERVAL - i) / DAWN_INTERVAL *
+				    (DAWN_INTERVAL - i) / DAWN_INTERVAL;
 				dawnTicksPerHalfWave[i] =
 				    tickDelay < 1 ? 1 : tickDelay;
 			}
