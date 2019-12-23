@@ -8,7 +8,9 @@
 #include<stdlib.h>
 
 #define WAKEUP 6
-#define DAWN_INTERVAL 110
+#define DAWN_MIN 8
+#define STEPS 8
+#define DAWN_INTERVAL ((DAWN_MIN + 1) * STEPS - 1)
 
 // Whether we have completed calibration or not
 volatile bool initialised = false;
@@ -17,7 +19,7 @@ int dawnTicksPerHalfWave[DAWN_INTERVAL];
 // The current number of AC cycles we have seen this minute (normally); or the total number of AC cycles we have seen (during calibraiton).
 volatile int cycleCounter = 0;
 // The number of minutes per day; initialised to be when you plug the thing in
-volatile int minuteCounter = (22 - WAKEUP) * 60 + DAWN_INTERVAL;	// 10PM
+volatile int minuteCounter = (22 - WAKEUP) * 60 + DAWN_MIN;	// 10PM
 
 int cmpfunc(const void *a, const void *b)
 {
@@ -74,7 +76,7 @@ ISR(INT0_vect)
 	const bool requestedOn = !(PINB & (1 << PB1));
 	if (requestedOn) {	// Requested on
 		PORTD |= (1 << PD2);
-	} else if (minuteCounter < DAWN_INTERVAL) {	// Dawn
+	} else if (minuteCounter < DAWN_MIN) {	// Dawn
 		// Make sure the AC power is off
 		PORTD &= ~(1 << PD2);
 		// Rest the timer
@@ -83,8 +85,12 @@ ISR(INT0_vect)
 		TCNT1 = 0;
 		// The timer is going to fire two interrupts A to turn on the AC, and B to turn off the signal to the AC (since the TRIAC will stay on)
 		TIFR1 |= (1 << OCF1A) | (1 << OCF1B);
-		OCR1A = dawnTicksPerHalfWave[minuteCounter];
-		OCR1B = dawnTicksPerHalfWave[minuteCounter] + 10;
+		// Working in 15 second chunks
+		const int ticks =
+		    dawnTicksPerHalfWave[minuteCounter * STEPS +
+					 cycleCounter / (7200 / STEPS)];
+		OCR1A = ticks;
+		OCR1B = ticks + 10;
 		// Start the timer
 		TCCR1A = 0;
 		TCCR1B = (1 << CS12);
