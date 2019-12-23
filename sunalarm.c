@@ -97,7 +97,7 @@ ISR(INT0_vect)
 		// Start the timer
 		TCCR1A = 0;
 		TCCR1B = (1 << CS12);
-	} else if (minuteCounter < 2 * DAWN_INTERVAL) {	// Morning period always on
+	} else if (minuteCounter < 100 && (minuteCounter > DAWN_MIN || (cycleCounter / 120) % 2 == 0 || cycleCounter > 1200)) {	// Morning period always on (blinking at start)
 		PORTD |= (1 << PD2);
 	} else {		// Always off
 		PORTD &= ~(1 << PD2);
