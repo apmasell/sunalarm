@@ -20,6 +20,8 @@ int dawnTicksPerHalfWave[DAWN_INTERVAL];
 volatile int cycleCounter = 0;
 // The number of minutes per day; initialised to be when you plug the thing in
 volatile int minuteCounter = (22 - WAKEUP) * 60 + DAWN_MIN;	// 10PM
+// If we get an on during morning, we skip everything for this day
+volatile bool sleepInLatch;
 
 int cmpfunc(const void *a, const void *b)
 {
@@ -77,29 +79,43 @@ ISR(INT0_vect)
 		minuteCounter = (minuteCounter + 1) % 1440;	// minutes per day
 	}
 	const bool requestedOn = !(PINB & (1 << PB1));
-	if (requestedOn) {	// Requested on
-		PORTD |= (1 << PD2);
-	} else if (minuteCounter < DAWN_MIN) {	// Dawn
+	bool lampOn = false;
+	if (minuteCounter < DAWN_MIN) {	// Dawn
 		// Make sure the AC power is off
-		PORTD &= ~(1 << PD2);
-		// Rest the timer
-		TCCR1A = 0;
-		TCCR1B = 0;
-		TCNT1 = 0;
-		// The timer is going to fire two interrupts A to turn on the AC, and B to turn off the signal to the AC (since the TRIAC will stay on)
-		TIFR1 |= (1 << OCF1A) | (1 << OCF1B);
-		// Working in 15 second chunks
-		const int ticks =
-		    dawnTicksPerHalfWave[minuteCounter * STEPS +
-					 cycleCounter / (7200 / STEPS)];
-		OCR1A = ticks;
-		OCR1B = ticks + 10;
-		// Start the timer
-		TCCR1A = 0;
-		TCCR1B = (1 << CS12);
-	} else if (minuteCounter < 100 && (minuteCounter > DAWN_MIN || (cycleCounter / 120) % 2 == 0 || cycleCounter > 1200)) {	// Morning period always on (blinking at start)
+		lampOn = false;
+		if (requestedOn) {
+			// This means we want to sleep in
+			sleepInLatch = true;
+		} else if (!sleepInLatch) {
+			// Rest the timer
+			TCCR1A = 0;
+			TCCR1B = 0;
+			TCNT1 = 0;
+			// The timer is going to fire two interrupts A to turn on the AC, and B to turn off the signal to the AC (since the TRIAC will stay on)
+			TIFR1 |= (1 << OCF1A) | (1 << OCF1B);
+			// Working in 15 second chunks
+			const int ticks =
+			    dawnTicksPerHalfWave[minuteCounter * STEPS +
+						 cycleCounter / (7200 / STEPS)];
+			OCR1A = ticks;
+			OCR1B = ticks + 10;
+			// Start the timer
+			TCCR1A = 0;
+			TCCR1B = (1 << CS12);
+		}
+	} else if (minuteCounter < 100) {
+		lampOn = requestedOn || !sleepInLatch &&
+		    (minuteCounter != DAWN_MIN
+		     || (cycleCounter / 120) % 2 == 0 || cycleCounter > 1200);
+
+	} else {
+		lampOn = requestedOn;
+		sleepInLatch = false;
+	}
+	if (lampOn) {
 		PORTD |= (1 << PD2);
-	} else {		// Always off
+
+	} else {
 		PORTD &= ~(1 << PD2);
 	}
 }
