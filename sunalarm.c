@@ -12,25 +12,37 @@
 #define STEPS 8
 #define DAWN_INTERVAL ((DAWN_MIN + 1) * STEPS - 1)
 
-// Whether we have completed calibration or not
-volatile bool initialised = false;
+enum current_programme {
+	INIT,
+	NORMAL,
+	SLEEP_IN,
+	MANUAL_ON
+};
+
 // The number of timer ticks we sould delay for each minute in our simulated dawn. This is the amount of AC leading wave that we are chopping off. OR the total number of ticks per AC cycle we have seen (during calibration).
 int dawnTicksPerHalfWave[DAWN_INTERVAL];
+volatile enum current_programme currentProgramme = INIT;
+bool lastButtonState = false;
+int buttonPressDuration = 0;
+int manualMinutesLeft = 0;
 // The current number of AC cycles we have seen this minute (normally); or the total number of AC cycles we have seen (during calibraiton).
-volatile int cycleCounter = 0;
+int cycleCounter = 0;
 // The number of minutes per day; initialised to be when you plug the thing in
-volatile int minuteCounter = (22 - WAKEUP) * 60 + DAWN_MIN;	// 10PM
-// If we get an on during morning, we skip everything for this day
-volatile bool sleepInLatch;
+int minuteCounter = (22 - WAKEUP) * 60 + DAWN_MIN;	// 10PM
 
 int cmpfunc(const void *a, const void *b)
 {
 	return (*(int *)a - *(int *)b);
 }
 
+int compute_light_intensity(int minuteOfDay)
+{
+	return minuteOfDay < 100 ? minuteOfDay : 0;
+}
+
 ISR(INT0_vect)
 {
-	if (!initialised) {
+	if (currentProgramme == INIT) {
 		// Determining the correct time count is hard, so we're going to do it
 		// experimentally (as a side benefit, it will autocalibrate between 50/60Hz
 		// power sources); we measure the delay between AC zero crossings many times.
@@ -63,60 +75,92 @@ ISR(INT0_vect)
 				dawnTicksPerHalfWave[i] =
 				    tickDelay < 1 ? 1 : tickDelay;
 			}
-			initialised = true;
-			// Turn on the built-in LED
-			PORTD |= (1 << PD6);
+			currentProgramme = NORMAL;
 		} else {
 			// If we haven't seen enough AC cycles, reset the timer and capture another
 			TCNT1 = 0;
 			TCCR1A = 0;
 			TCCR1B = (1 << CS12);
+			return;
 		}
-		return;
 	}
 	cycleCounter = (cycleCounter + 1) % 7200;	// AC half-cycles per minute
 	if (cycleCounter == 0) {
 		minuteCounter = (minuteCounter + 1) % 1440;	// minutes per day
 	}
-	const bool requestedOn = !(PINB & (1 << PB1));
-	bool lampOn = false;
-	if (minuteCounter < DAWN_MIN) {	// Dawn
-		// Make sure the AC power is off
-		lampOn = false;
-		if (requestedOn) {
-			// This means we want to sleep in
-			sleepInLatch = true;
-		} else if (!sleepInLatch) {
-			// Rest the timer
-			TCCR1A = 0;
-			TCCR1B = 0;
-			TCNT1 = 0;
-			// The timer is going to fire two interrupts A to turn on the AC, and B to turn off the signal to the AC (since the TRIAC will stay on)
-			TIFR1 |= (1 << OCF1A) | (1 << OCF1B);
-			// Working in 15 second chunks
-			const int ticks =
-			    dawnTicksPerHalfWave[minuteCounter * STEPS +
-						 cycleCounter / (7200 / STEPS)];
-			OCR1A = ticks;
-			OCR1B = ticks + 10;
-			// Start the timer
-			TCCR1A = 0;
-			TCCR1B = (1 << CS12);
-		}
-	} else if (minuteCounter < 100) {
-		lampOn = requestedOn || !sleepInLatch &&
-		    (minuteCounter != DAWN_MIN
-		     || (cycleCounter / 120) % 2 == 0 || cycleCounter > 1200);
+	const bool currentButtonState = !(PINB & (1 << PB1));
+	if (lastButtonState != currentButtonState) {
+		lastButtonState = currentButtonState;
+		if (currentButtonState) {
+			buttonPressDuration = 0;
+		} else {
+			switch (currentProgramme) {
+			case NORMAL:
+				if (buttonPressDuration < 120) {
+					currentProgramme = SLEEP_IN;
+				} else {
+					currentProgramme = MANUAL_ON;
+					manualMinutesLeft = buttonPressDuration / 4;	// 1 second of holding == 30 min of being on
+				}
 
-	} else {
-		lampOn = requestedOn;
-		sleepInLatch = false;
+				break;
+
+			case MANUAL_ON:
+			case SLEEP_IN:
+				currentProgramme = NORMAL;
+				break;
+
+			}
+		}
+	} else if (currentButtonState && buttonPressDuration < 65535) {
+		buttonPressDuration += 1;
 	}
-	if (lampOn) {
+
+	int lightIntensity = 0;
+	switch (currentProgramme) {
+	case NORMAL:
+		lightIntensity = compute_light_intensity(minuteCounter);
+		break;
+	case SLEEP_IN:
+		lightIntensity = compute_light_intensity(minuteCounter - 60);
+		break;
+	case MANUAL_ON:
+		lightIntensity = manualMinutesLeft;
+		if (cycleCounter == 0) {
+			if (manualMinutesLeft == 0) {
+				currentProgramme = NORMAL;
+			} else {
+				manualMinutesLeft -= 1;
+			}
+
+		}
+		break;
+	}
+	if (lightIntensity == 0) {
+		PORTD &= ~(1 << PD2);
+	} else if (lightIntensity > 0 && lightIntensity <= STEPS) {
+		PORTD &= ~(1 << PD2);
+		// Rest the timer
+		TCCR1A = 0;
+		TCCR1B = 0;
+		TCNT1 = 0;
+		// The timer is going to fire two interrupts A to turn on the AC, and B to turn off the signal to the AC (since the TRIAC will stay on)
+		TIFR1 |= (1 << OCF1A) | (1 << OCF1B);
+		// Working in 15 second chunks
+		const int ticks = dawnTicksPerHalfWave[lightIntensity - 1];
+		OCR1A = ticks;
+		OCR1B = ticks + 5;
+		// Start the timer
+		TCCR1A = 0;
+		TCCR1B = (1 << CS12);
+	} else {
 		PORTD |= (1 << PD2);
 
+	}
+	if ((currentProgramme == SLEEP_IN) && (cycleCounter < 5760)) {
+		PORTD |= (1 << PD6);
 	} else {
-		PORTD &= ~(1 << PD2);
+		PORTD &= ~(1 << PD6);
 	}
 }
 
@@ -125,7 +169,7 @@ ISR(INT0_vect)
  */
 ISR(TIMER1_COMPA_vect)
 {
-	if (initialised) {
+	if (currentProgramme != INIT) {
 		PORTD |= (1 << PD2);
 	}
 }
@@ -135,7 +179,7 @@ ISR(TIMER1_COMPA_vect)
  */
 ISR(TIMER1_COMPB_vect)
 {
-	if (initialised) {
+	if (currentProgramme != INIT) {
 		TCCR1A = 0;
 		TCCR1B = 0;
 		PORTD &= ~(1 << PD2);
@@ -160,26 +204,9 @@ int main()
 	EIMSK = (1 << INT0);
 	TCNT1 = 0;
 
+	//Turn on built-in LED until initialization is over
+	PORTD |= (1 << PD6);
+
 	sei();
-	while (!initialised) ;
-	while (true) {
-		const bool requestedOn = !(PINB & (1 << PB1));
-		if (requestedOn) {
-			if (cycleCounter % 60 == 0) {
-				if ((cycleCounter / 60) % 2 == 0) {
-					PORTD &= ~(1 << PD6);
-				} else {
-					PORTD &= ~(1 << PD6);
-				}
-			}
-		} else {
-			if (cycleCounter % 120 == 80) {
-				PORTD |= (1 << PD6);
-			} else if (cycleCounter % 120 == 0
-				   && cycleCounter / 120 <=
-				   (minuteCounter / 60 + WAKEUP) % 12) {
-				PORTD &= ~(1 << PD6);
-			}
-		}
-	}
+	while (true) ;
 }
