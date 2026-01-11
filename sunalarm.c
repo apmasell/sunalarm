@@ -122,7 +122,12 @@ ISR(INT0_vect)
 		lightIntensity = compute_light_intensity(minuteCounter);
 		break;
 	case SLEEP_IN:
-		lightIntensity = compute_light_intensity(minuteCounter - 60);
+		lightIntensity =
+		    minuteCounter >
+		    60 ? compute_light_intensity(minuteCounter - 60) : 0;
+		if (minuteCounter == 300) {
+			currentProgramme = NORMAL;
+		}
 		break;
 	case MANUAL_ON:
 		lightIntensity = manualMinutesLeft;
