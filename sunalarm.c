@@ -9,7 +9,7 @@
 
 #define WAKEUP 6
 #define DAWN_MIN 8
-#define STEPS 8
+#define STEPS 10
 #define DAWN_INTERVAL ((DAWN_MIN + 1) * STEPS - 1)
 
 enum current_programme {
@@ -25,6 +25,7 @@ volatile enum current_programme currentProgramme = INIT;
 bool lastButtonState = false;
 int buttonPressDuration = 0;
 int manualMinutesLeft = 0;
+int lastLightIntensity = 0;
 // The current number of AC cycles we have seen this minute (normally); or the total number of AC cycles we have seen (during calibraiton).
 int cycleCounter = 0;
 // The number of minutes per day; initialised to be when you plug the thing in
@@ -96,8 +97,14 @@ ISR(INT0_vect)
 		} else {
 			switch (currentProgramme) {
 			case NORMAL:
+			case SLEEP_IN:
 				if (buttonPressDuration < 120) {
-					currentProgramme = SLEEP_IN;
+					currentProgramme =
+					    currentProgramme ==
+					    NORMAL ? SLEEP_IN : NORMAL;
+					if (currentProgramme == SLEEP_IN) {
+						lastLightIntensity = STEPS + 1;
+					}
 				} else {
 					currentProgramme = MANUAL_ON;
 					manualMinutesLeft = buttonPressDuration / 4;	// 1 second of holding == 30 min of being on
@@ -106,7 +113,6 @@ ISR(INT0_vect)
 				break;
 
 			case MANUAL_ON:
-			case SLEEP_IN:
 				currentProgramme = NORMAL;
 				break;
 
@@ -117,33 +123,61 @@ ISR(INT0_vect)
 	}
 
 	int lightIntensity = 0;
-	switch (currentProgramme) {
-	case NORMAL:
-		lightIntensity = compute_light_intensity(minuteCounter);
-		break;
-	case SLEEP_IN:
-		lightIntensity =
-		    minuteCounter >
-		    60 ? compute_light_intensity(minuteCounter - 60) : 0;
-		if (minuteCounter == 300) {
-			currentProgramme = NORMAL;
+	if (currentButtonState) {
+		// Strobe 5x/s
+		switch (currentProgramme) {
+		case NORMAL:
+		case SLEEP_IN:
+			lightIntensity =
+			    buttonPressDuration < 120 ? STEPS / 4 : STEPS;
+			break;
+		case MANUAL_ON:
+			lightIntensity = STEPS / 2;
+			break;
 		}
-		break;
-	case MANUAL_ON:
-		lightIntensity = manualMinutesLeft;
-		if (cycleCounter == 0) {
-			if (manualMinutesLeft == 0) {
+	} else {
+		switch (currentProgramme) {
+		case NORMAL:
+			lightIntensity = compute_light_intensity(minuteCounter);
+			break;
+		case SLEEP_IN:
+			lightIntensity =
+			    compute_light_intensity(minuteCounter - 60);
+			if (minuteCounter == 300) {
 				currentProgramme = NORMAL;
-			} else {
-				manualMinutesLeft -= 1;
 			}
+			break;
+		case MANUAL_ON:
+			lightIntensity = manualMinutesLeft;
+			if (cycleCounter == 0) {
+				if (manualMinutesLeft == 0) {
+					currentProgramme = NORMAL;
+				} else {
+					manualMinutesLeft -= 1;
+				}
 
+			}
+			break;
 		}
-		break;
 	}
-	if (lightIntensity == 0) {
+	lightIntensity =
+	    lightIntensity < 0 ? 0 : (lightIntensity >
+				      STEPS + 1 ? STEPS + 1 : lightIntensity);
+	if (!currentButtonState && lastLightIntensity - lightIntensity > 2) {
+		if (cycleCounter % 6 == 0) {
+			lastLightIntensity -= 1;
+		}
+	} else if (!currentButtonState
+		   && lightIntensity - lastLightIntensity > 2) {
+		if (cycleCounter % 6 == 0) {
+			lastLightIntensity += 1;
+		}
+	} else {
+		lastLightIntensity = lightIntensity;
+	}
+	if (lastLightIntensity == 0) {
 		PORTD &= ~(1 << PD2);
-	} else if (lightIntensity > 0 && lightIntensity <= STEPS) {
+	} else if (lastLightIntensity > 0 && lastLightIntensity <= STEPS) {
 		PORTD &= ~(1 << PD2);
 		// Rest the timer
 		TCCR1A = 0;
@@ -152,7 +186,7 @@ ISR(INT0_vect)
 		// The timer is going to fire two interrupts A to turn on the AC, and B to turn off the signal to the AC (since the TRIAC will stay on)
 		TIFR1 |= (1 << OCF1A) | (1 << OCF1B);
 		// Working in 15 second chunks
-		const int ticks = dawnTicksPerHalfWave[lightIntensity - 1];
+		const int ticks = dawnTicksPerHalfWave[lastLightIntensity - 1];
 		OCR1A = ticks;
 		OCR1B = ticks + 5;
 		// Start the timer
